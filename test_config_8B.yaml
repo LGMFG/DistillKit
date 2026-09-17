@@ -1,0 +1,74 @@
+project_name: test-distill_tulu3_lr1e-5_sl512_wd05_wr025_lrscos
+
+# This is a test configuration for distillkit. It uses a small model and a dummy dataset for quick testing.
+trust_remote_code: true
+
+model: Qwen/Qwen3-0.6B
+
+frozen_res: # List of model components to freeze during distillation. Freezing these components means they will not be updated during training, which can help retain the teacher model's knowledge in these parts and reduce computational load. Adjust this list based on your specific distillation goals and the architecture of the teacher model.
+  - embed_tokens # The token embedding layer, responsible for converting input tokens into dense vectors. Freezing this layer helps retain the teacher's understanding of the input vocabulary and can speed up training.
+  - lm_head # The language modeling head, which generates the output predictions. Freezing this layer can help preserve the teacher's output distribution and reduce the number of parameters that need to be updated during distillation.
+
+output_path: ./output/tulu3_lr1e-5_sl512_wd05_wr025_lrscos
+use_flash_attention: true
+sequence_length: 512
+
+dataset:
+  train_dataset:
+    num_proc: 32
+    kind: local
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/tulu3 #_preprocessed_qwen06b #./dummy_dataset
+  #prepacked: true # Whether to use prepacked datasets. Prepacking involves processing and storing the dataset in a format that is optimized for training, which can significantly speed up data loading and reduce training time. If set to true, ensure that the dataset is preprocessed and stored in the expected format before starting training.
+
+  prepared_dataset_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/prepared_datasets/tulu3
+
+teacher:
+  kind: hf
+  path: Qwen/Qwen3-8B
+  kwargs:
+    #disable flash attention for compatibility with the test environment
+    attn_implementation: flash_attention_2
+    torch_dtype: bfloat16
+
+
+
+loss_functions:
+  - function: cross_entropy
+    weight: 0.3
+  - function: kl
+    weight: 0.3
+    temperature: 2.0
+  - function: hs_cosine
+    weight: 0.4
+
+
+layer_mapping: all # Distill all layers from the teacher to the student. This means that the distillation process will consider all layers of the teacher model when transferring knowledge to the student model. Adjust this setting if you want to focus on specific layers or components of the teacher model for distillation.
+
+training_args:
+  num_train_epochs: 1
+
+  #dataset_text_field: text # no mapping for the text field in the dataset, as it is already named 'text'. If your dataset uses a different field name for the input text, you can specify it here to ensure that the training process correctly identifies and uses the text data.
+
+  packing: true # Whether to use sequence packing. Packing allows multiple shorter sequences to be combined into a single batch, improving GPU utilization and training speed, especially with variable-length inputs. It can significantly reduce the number of padding tokens, leading to more efficient training.
+
+  per_device_train_batch_size: 8 # Batch size per GPU. This is the number of samples that will be processed together in one forward/backward pass on each GPU
+  gradient_accumulation_steps: 4 # Effective batch size = per_device_train_batch_size * gradient_accumulation_steps
+  
+  learning_rate: 1.0e-5
+  weight_decay: 0.05
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine
+
+  bf16: true
+  fp16: false
+  optim: adamw_torch
+
+  logging_steps: 1
+
+  dataloader_num_workers: 16 # 1 Recommended
+  #dataloader_pin_memory: true # Pin memory for faster data transfer to GPU. This can improve performance, especially with larger batch sizes.
+
+  #gradient_checkpointing: true # Enable gradient checkpointing to save memory. This trades compute for memory by recomputing intermediate activations during the backward pass, allowing you to train larger models or use larger batch sizes without running out of GPU memory.
+
+  save_strategy: steps
+  save_steps: 1000 # Save a checkpoint every 10 steps

@@ -1,0 +1,32 @@
+project_name: test-distillkit
+
+# This is a test configuration for distillkit. It uses a small model and a dummy dataset for quick testing.
+trust_remote_code: true
+
+model: Qwen/Qwen3-0.6B
+
+output_path: ./output
+sequence_length: 128
+
+dataset:
+  train_dataset:
+    kind: local
+    disk_path: ./dummy_dataset
+  prepacked: false
+
+teacher:
+  kind: hf
+  path: Qwen/Qwen3-0.6B
+  #kwargs:
+    #disable flash attention for compatibility with the test environment
+    #attn_implementation: eager
+
+loss_functions:
+  - function: cross_entropy
+    weight: 1.0
+
+training_args:
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  learning_rate: 1.0e-5
+  bf16: false

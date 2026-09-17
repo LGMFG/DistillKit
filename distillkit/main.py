@@ -138,6 +138,7 @@ def _load_dataset(
             _format_row,
             remove_columns=res.column_names,
             fn_kwargs={"tokenizer": tokenizer},
+            num_proc=os.cpu_count(), # changed to os.cpu_count() for faster processing
         )
     if full_prepared_path:
         os.makedirs(full_prepared_path, exist_ok=True)
@@ -190,6 +191,7 @@ def load_data(
 def load_student_model(
     config: DistillationRunConfig,
     tokenizer_vocab_size: int,
+    tokenizer: transformers.PreTrainedTokenizer,
 ) -> transformers.PreTrainedModel:
     if config.functionary_packing:
         monkey_patch_packing_for_model(config.train_model)
@@ -201,7 +203,7 @@ def load_student_model(
     LOG.info(f"Loading model {config.train_model} with class {auto_cls}")
     extra_kwargs = {"trust_remote_code": config.trust_remote_code}
     if config.use_flash_attention:
-        extra_kwargs["attn_implementation"] = "flash_attention_2"
+        extra_kwargs["attn_implementation"] = "flash_attention_2" # change to flash_attention_2 or eager
         extra_kwargs["torch_dtype"] = torch.bfloat16
     model = auto_cls.from_pretrained(
         config.train_model,
@@ -209,6 +211,19 @@ def load_student_model(
         **config.model_kwargs,
     )
     LOG.info("Loaded model.")
+
+    # -----------------------------------
+    # align tokenizer + model special tokens
+    # -----------------------------------
+
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    model.config.bos_token_id = tokenizer.bos_token_id
+    model.generation_config.bos_token_id = tokenizer.bos_token_id
 
     model_vocab_size = model.get_input_embeddings().weight.shape[0]
     if (
@@ -311,7 +326,11 @@ def do_distill(config: DistillationRunConfig, config_source: str | None = None):
             max(tokenizer.get_vocab().values()) + 1,
         )
 
-    model = load_student_model(config, tokenizer_vocab_size)
+    model = load_student_model(
+        config,
+        tokenizer_vocab_size,
+        tokenizer,
+    )
 
     config_kwargs = dict(config.training_args)
     dataset_kwargs = config_kwargs.pop("dataset_kwargs", {})

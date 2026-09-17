@@ -1,0 +1,69 @@
+project_name: smoke_afm_selfdistill
+
+model: arcee-ai/AFM-4.5B-Base
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/distillkit/output/smoke
+use_flash_attention: true
+sequence_length: 2048
+
+dataset:
+  # NOTE: no `kind:` field. DatasetPath is a plain union in configuration.py --
+  # `disk_path` selects LocalDataset, `repo_id` selects HfRepoDataset.
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42
+  num_samples: 5000            # smoke test only -- see 5e before removing this
+  num_eval_samples: 200
+  prepared_dataset_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/prepared_datasets/fineweb_edu_3B
+
+teacher:
+  kind: hf                     # teacher IS a discriminated union -- required here
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16            # was torch_dtype -- deprecated in transformers 5
+
+layer_mapping: all
+
+loss_functions:
+  - function: cross_entropy
+    weight: 0.2
+  - function: kl
+    weight: 0.2
+    temperature: 2.0
+  - function: hs_cosine
+    weight: 0.6
+
+training_args:
+  max_steps: 5
+
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16
+
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+
+  learning_rate: 1.0e-5
+  bf16: true
+  max_grad_norm: 0.5
+  optim: adamw_torch
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+
+  logging_steps: 1
+  save_strategy: "no"
+  skip_memory_metrics: false      # ADDED -- reports train_mem_gpu_peaked_delta
+
+  eval_strategy: steps
+  eval_steps: 5
+  per_device_eval_batch_size: 1   # CRITICAL -- default is 8 and will OOM
+  prediction_loss_only: true      # CRITICAL -- else HF gathers full logits
+
+  report_to: wandb
