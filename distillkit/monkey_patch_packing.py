@@ -141,7 +141,7 @@ def monkey_patch_for_model_with_name(model_type: str, modelling_type: str):
 def monkey_patch_packing_for_model(pretrained_model):
     # Monkey-patch flash attention if this transformers already merged: https://github.com/huggingface/transformers/commit/e314395277d784a34ee99526f48155d4d62cff3d
     # this will work for all models using flash attention: Llama, Mistral, Qwen2, Phi3, ...
-    model_config = transformers.AutoConfig.from_pretrained(pretrained_model)
+    model_config = transformers.AutoConfig.from_pretrained(pretrained_model, trust_remote_code=True) # added trust_remote_code=True 
     config_type = type(model_config).__name__.lower()
     if hasattr(transformers, "modeling_flash_attention_utils"):
         transformers.modeling_flash_attention_utils._get_unpad_data = get_unpad_data
