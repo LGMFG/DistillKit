@@ -1,0 +1,71 @@
+project_name: r0_kda_smoke
+
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/students/afm_kda_hybrid31_init
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r0_smoke
+use_flash_attention: true
+sequence_length: 2048
+
+# Anchored deliberately: main.py matches with re.search, so a bare
+# `norm\.weight` would also freeze KDA's own o_norm.weight.  See section 3.
+frozen_res:
+  - ^model\.embed_tokens\.
+  - ^lm_head\.
+  - ^model\.norm\.weight$
+  - ^model\.layers\.[0-9]+\.(input_layernorm|post_attention_layernorm)\.weight$
+  - ^model\.layers\.[0-9]+\.mlp\.
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42                       # NOT null -- startup doc 8b is not done yet
+  num_samples: 20000
+  num_eval_samples: 200
+  prepared_dataset_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/prepared_datasets/fineweb_edu_3B
+
+teacher:
+  kind: hf                       # discriminated union -- `kind` IS required here
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16              # transformers 5.x: NOT torch_dtype
+
+loss_functions:
+  - {function: cross_entropy, weight: 0.2}
+  - {function: kl,            weight: 0.2, temperature: 2.0}
+  - {function: hs_cosine,     weight: 0.6}
+
+layer_mapping: all               # 36 pairs, aligns layer INPUTS -- startup doc 5f
+
+functionary_packing: true        # TOP LEVEL -- and the source of the segment ids
+
+training_args:
+  max_steps: 2
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16
+
+  per_device_train_batch_size: 1   # LOAD-BEARING -- see the A7b note above
+  gradient_accumulation_steps: 8   # 1 node x 4 GPUs x 8 = global batch 32
+
+  learning_rate: 1.0e-3
+  weight_decay: 0.00
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine_with_min_lr
+  lr_scheduler_kwargs: {min_lr_rate: 0.01} # min_lr / learning_rate -- identical schedule. Absolute learning rate (min_lr) doesnt work. We use fraction of the peak (min_lr_rate). 
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 1
+  save_strategy: "no"
+  eval_strategy: "no"
+  skip_memory_metrics: false
+  report_to: none
