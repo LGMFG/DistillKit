@@ -1,0 +1,87 @@
+project_name: r5_stage1_kda_hybrid31_1ep
+
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/students/afm_kda_hybrid31_init
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r5_stage1_kda_hybrid31_1ep
+use_flash_attention: true
+sequence_length: 2048
+
+# Anchored: main.py matches with re.search, so a bare `norm\.weight` would
+# also freeze KDA's own o_norm.weight.  Verified: 147 frozen / 477 trainable.
+frozen_res:
+  - ^model\.embed_tokens\.
+  - ^lm_head\.
+  - ^model\.norm\.weight$
+  - ^model\.layers\.[0-9]+\.(input_layernorm|post_attention_layernorm)\.weight$
+  - ^model\.layers\.[0-9]+\.mlp\.
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42                # REQUIRED: the train split is 4 shards in order
+  # num_samples DELIBERATELY ABSENT -- the whole 2,921,000-document split.
+  # 2,921,000 x ~774 effective tokens = 2.261 B = one epoch.
+  num_eval_samples: 200
+
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+
+loss_functions:
+  - {function: cross_entropy, weight: 0.2}
+  - {function: kl,            weight: 0.2, temperature: 2.0}
+  - {function: hs_cosine,     weight: 0.6}
+
+layer_mapping: all
+
+functionary_packing: false
+
+training_args:
+  max_steps: 34940                 # ONE EPOCH, measured not estimated:
+                                   # a 1-process run with max_steps:-1 /
+                                   # num_train_epochs:1 printed 559,146 steps
+                                   # at batch 2 -> 1,118,292 packed sequences
+                                   # -> 2.2903 B tokens -> 34,946.6 steps at
+                                   # global batch 32.  34,940 = 99.98% of an
+                                   # epoch and divides cleanly below.
+                                   # Effective tokens/document = 784.1.
+  save_steps: 3494                 # exactly 10, the last coinciding with the end
+  eval_steps: 1747                 # exactly 20; every 2nd eval lands on a save
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16
+
+  per_device_train_batch_size: 1   # LOAD-BEARING (memory, and batch-1 assumptions)
+  gradient_accumulation_steps: 2   # 4 nodes x 4 GPUs x 2 = global batch 32
+
+  learning_rate: 1.0e-3
+  weight_decay: 0.00
+  warmup_ratio: 0.025              # x 34500 = ~862 warmup steps
+  lr_scheduler_type: cosine_with_min_lr
+  lr_scheduler_kwargs: {min_lr_rate: 0.01}   # NOT min_lr -- crashes under DeepSpeed
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 10
+  save_strategy: steps
+  
+  save_total_limit: 10             # R1 used 1 and threw away the quality-vs-tokens
+                                   # curve, which IS this run's deliverable.
+                                   # ~21 GB each -> ~210 GB.  df first.
+  eval_strategy: steps
+  
+  per_device_eval_batch_size: 1    # default 8 will OOM
+  prediction_loss_only: true       # else HF gathers full logits
+  skip_memory_metrics: false
+  report_to: none

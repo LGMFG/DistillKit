@@ -1,0 +1,86 @@
+project_name: r1_stage2_kda_hybrid31_unfreeze
+
+# STAGE 2 on R1 = RADLADS STEP 2, followed as published.
+# Arcee merged RADLADS steps 1+2 into one stage with the MLPs frozen (our R1-R4)
+# and let a later long-context fine-tune adapt the MLPs.  RADLADS step 2 is the
+# full-parameter KL distillation that merge left out.  Its published settings
+# (RADLADS Table 2 and section 4.3), and where we deviate:
+#   loss        KL against the teacher's logits, nothing else       -> KL 1.0
+#   trainable   the whole model; "freezing the MLPs and embeddings
+#               results in significantly reduced performance"       -> no frozen_res
+#   LR          flat 1e-5, no decay                                 -> constant 1e-5
+#   tokens      250-700 M (500 M at 7B)                             -> 1.0 B, checkpoints
+#                                                                      every 100 M, so the
+#                                                                      500 M point exists too
+#   seqlen      512                                                 -> 2048 (= our stage 1)
+#   data        same dataset as step 1 (DCLM throughout)            -> FineWeb-Edu, zero-overlap split
+#   KL temp     not stated                                          -> 2.0, = our stage 1
+# Start: R1 checkpoint-4580 (the top level was overwritten 2026-09-29).
+# Expect NO "Froze N tensors" line: nothing is frozen.
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r1_stage1_hybrid31/checkpoint-4580
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r1_stage2_kda_hybrid31_unfreeze
+use_flash_attention: true
+sequence_length: 2048
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train_stage2_nooverlap
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42                     # train: reshuffles the stage-2 split (harmless).  eval: picks
+                               # the same 200 held-out docs as R1-R5.
+                               # The train split is 1,350,000 docs at seed-42 positions
+                               # 500,000..1,849,999 -- ZERO overlap with stage 1 (verified and
+                               # recorded in its provenance.json by make_stage2_split.py).
+                               # No num_samples: the split is already the right size.
+                               # ~1.06 B tokens >= 15,260 x 65,536.
+  num_eval_samples: 200
+
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+
+loss_functions:
+  - {function: kl, weight: 1.0, temperature: 2.0}
+
+functionary_packing: false
+
+training_args:
+  max_steps: 15260                 # 15,260 x 65,536 = 1.000 B tokens
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16             # MUST stay 16: it is part of the cache key
+
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 2   # 4 nodes x 4 GPUs x 2 = 32
+
+  learning_rate: 1.0e-5
+  weight_decay: 0.00
+  warmup_steps: 380                # ~25 M tokens
+  lr_scheduler_type: constant_with_warmup
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 1526                 # every 100 M tokens -> 10 checkpoints; 1526 x 3 = 4578 ~ R1's 300 M
+  save_total_limit: 10
+  save_only_model: true            # weights only, ~10 GB each.  With everything trainable a
+                                   # full checkpoint carries ~60 GB of optimizer state.
+                                   # Cost: a crash restarts from weights with fresh Adam.
+  eval_strategy: steps
+  eval_steps: 1526
+  per_device_eval_batch_size: 1
+  prediction_loss_only: true
+  skip_memory_metrics: false
+  report_to: none

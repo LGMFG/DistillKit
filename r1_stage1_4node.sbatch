@@ -36,9 +36,10 @@ export TOKENIZERS_PARALLELISM=false
 cd $WORK_LUKAS/distillkit
 
 echo "=== provenance ==="
-git -C $WORK_LUKAS/afm_kda    log -1 --oneline
-git -C $WORK_LUKAS/distillkit log -1 --oneline
-echo "config=$RUN_CONFIG  master=$MASTER_ADDR  nodes=$SLURM_NNODES  procs=$TOTAL_PROCS"
+git -C $WORK_LUKAS/distillkit log -1 --oneline          # the TRAINER: repo hash is correct here
+echo "--- model (the code that will RUN, not the repo) ---"
+cat $STUDENT/build_info.json
+sha1sum $STUDENT/*.py
 echo "=================="
 
 # versions + pre-warm the remote-code module cache, single process
