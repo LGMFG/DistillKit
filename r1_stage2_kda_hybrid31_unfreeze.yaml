@@ -32,7 +32,7 @@ dataset:
   seed: 42                     # train: reshuffles the stage-2 split (harmless).  eval: picks
                                # the same 200 held-out docs as R1-R5.
                                # The train split is 1,350,000 docs at seed-42 positions
-                               # 500,000..1,849,999 -- ZERO overlap with stage 1 (verified and
+                               # 500,000....1,864,858 -- ZERO overlap with stage 1 (verified and
                                # recorded in its provenance.json by make_stage2_split.py).
                                # No num_samples: the split is already the right size.
                                # ~1.06 B tokens >= 15,260 x 65,536.

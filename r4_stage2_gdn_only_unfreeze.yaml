@@ -1,0 +1,78 @@
+project_name: r4_stage2_gdn_only_unfreeze
+
+# STAGE 2 on GDN all-linear (R4) -- IDENTICAL to r1_stage2_kda_hybrid31_unfreeze.yaml except
+# project_name, model and output_path, so the four students get the same recipe
+# and their stage-2 gains are comparable:
+#   RADLADS step 2 as published (full-parameter KL distillation) on top of
+#   Arcee's merged stage 1 (our R1-R4, MLPs frozen).
+#   KL 1.0 at T = 2 | nothing frozen | constant 1e-5 after 380 warmup steps |
+#   1.0 B tokens (15,260 steps) | weights-only checkpoints every 100 M tokens.
+# Start: r4_stage1_gdn_only/checkpoint-4580, the final stage-1 step (same choice as R1).
+# Expect NO "Froze N tensors" line: nothing is frozen.
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r4_stage1_gdn_only/checkpoint-4580
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r4_stage2_gdn_only_unfreeze
+use_flash_attention: true
+sequence_length: 2048
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train_stage2_nooverlap
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42                     # train: reshuffles the stage-2 split.  eval: the same 200
+                               # held-out docs as R1-R5 and R1 stage 2.
+                               # Train split (make_stage2_split.py v4, see its provenance.json):
+                               # 1,350,000 docs from seed-42 positions 500,000..1,864,858,
+                               # skipping every text that occurs in stage 1 or held-out and
+                               # every repeat -> zero overlap.  Same split AND same
+                               # preprocessing cache as R1 stage 2: the cache key is the data,
+                               # the teacher's tokenizer and num_proc -- not the student.
+  num_eval_samples: 200
+
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+
+loss_functions:
+  - {function: kl, weight: 1.0, temperature: 2.0}
+
+functionary_packing: false
+
+training_args:
+  max_steps: 15260                 # 15,260 x 65,536 = 1.000 B tokens
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16             # MUST stay 16: it is part of the cache key
+
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 2   # 4 nodes x 4 GPUs x 2 = 32
+
+  learning_rate: 1.0e-5
+  weight_decay: 0.00
+  warmup_steps: 380                # ~25 M tokens
+  lr_scheduler_type: constant_with_warmup
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 1526                 # every 100 M tokens -> 10 checkpoints; checkpoint-4578 ~ 300 M
+  save_total_limit: 10
+  save_only_model: true            # weights only, ~10 GB each (a full one: ~60 GB with Adam).
+                                   # Cost: a crash restarts from weights with fresh Adam.
+  eval_strategy: steps
+  eval_steps: 1526
+  per_device_eval_batch_size: 1
+  prediction_loss_only: true
+  skip_memory_metrics: false
+  report_to: none
