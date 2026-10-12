@@ -1,0 +1,80 @@
+project_name: r1_stage2_kda_hybrid31_cosine5e5
+
+# LEARNING-RATE CHECK for stage 2 on R1.  IDENTICAL to
+# r1_stage2_kda_hybrid31_unfreeze.yaml except project_name, output_path and the
+# three LR lines below:
+#   main runs (R1-R4): constant 1e-5 after 380 warmup steps   (RADLADS step 2)
+#   this run (R1 only): cosine 5e-5 -> 1e-5 after 380 warmup  (HALO stage 2)
+# Why 5e-5: HALO (Chen et al. 2026, Table 6) tuned its stage-2 peak LR per model
+# size, and 5e-5 is the value for their model converted from Qwen3-4B, which has
+# AFM-4.5B's shape (36 layers, hidden 2560).  The floor 1e-5 is theirs too
+# (Table 5).  Their ablation (Table 9) calls RADLADS' constant 1e-5 "highly
+# suboptimal" -- but their stage 1 is layer-local MSE alignment, ours is already
+# end-to-end with KL, so whether that transfers is exactly what this run tests.
+# ⚠️ Intermediate checkpoints are NOT comparable to the constant-LR run's: on a
+# cosine schedule they are also at a different point of annealing (the R5
+# lesson).  Compare final models; use the curve only within this run.
+# ⚠️ HALO's own KDA conversion diverged in stage 2 (App. G.2).  Watch grad_norm.
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r1_stage1_hybrid31/checkpoint-4580
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r1_stage2_kda_hybrid31_cosine5e5
+use_flash_attention: true
+sequence_length: 2048
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train_stage2_nooverlap
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42                     # same split, same cache, same 200 eval docs as the main runs
+                               # (make_stage2_split.py v4: 1,350,000 docs, seed-42 positions
+                               # 500,000..1,864,858, zero overlap with stage 1 and held-out)
+  num_eval_samples: 200
+
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+
+loss_functions:
+  - {function: kl, weight: 1.0, temperature: 2.0}
+
+functionary_packing: false
+
+training_args:
+  max_steps: 15260                 # 15,260 x 65,536 = 1.000 B tokens
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16             # MUST stay 16: it is part of the cache key
+
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 2   # 4 nodes x 4 GPUs x 2 = 32
+
+  learning_rate: 5.0e-5            # <-- differs (main: 1.0e-5)
+  weight_decay: 0.00
+  warmup_steps: 380                # ~25 M tokens
+  lr_scheduler_type: cosine_with_min_lr          # <-- differs (main: constant_with_warmup)
+  lr_scheduler_kwargs: {min_lr_rate: 0.2}         # <-- differs: 0.2 x 5e-5 = 1e-5 floor.
+                                                  #     min_lr_rate, NOT min_lr (DeepSpeed crash)
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 1526
+  save_total_limit: 10
+  save_only_model: true            # weights only, ~10 GB each
+  eval_strategy: steps
+  eval_steps: 1526
+  per_device_eval_batch_size: 1
+  prediction_loss_only: true
+  skip_memory_metrics: false
+  report_to: none
