@@ -1,0 +1,80 @@
+project_name: r1_stage1_hybrid31_finemath
+
+# FineMath stage 1 = R1 (r1_stage1_4node.yaml) with ONLY the training corpus changed:
+#   train data   finemath_4plus_stage1 (352,211 docs, ~345 M effective tokens, distinct texts)
+#   num_samples  removed: the split is already the right size (R1 drew 500,000 of FineWeb's train)
+#   eval data    UNCHANGED: the same 200 FineWeb-Edu held-out docs as R1-R5, so eval_loss is
+#                directly comparable with R1's 0.5686 (maths held-out is measured afterwards)
+# Everything else is byte-identical to R1's YAML.  Student: the same init checkpoint.
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/students/afm_kda_hybrid31_init
+trust_remote_code: true
+
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r1_stage1_hybrid31_finemath
+use_flash_attention: true
+sequence_length: 2048
+
+# Anchored: main.py matches with re.search, so a bare `norm\.weight` would
+# also freeze KDA's own o_norm.weight.  Verified: 147 frozen / 477 trainable.
+frozen_res:
+  - ^model\.embed_tokens\.
+  - ^lm_head\.
+  - ^model\.norm\.weight$
+  - ^model\.layers\.[0-9]+\.(input_layernorm|post_attention_layernorm)\.weight$
+  - ^model\.layers\.[0-9]+\.mlp\.
+
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/finemath_4plus_stage1
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/finemath_4plus_heldout
+  seed: 42                # shuffles the train split; picks R1's 200 eval docs
+  num_eval_samples: 200
+
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+
+loss_functions:
+  - {function: cross_entropy, weight: 0.2}
+  - {function: kl,            weight: 0.2, temperature: 2.0}
+  - {function: hs_cosine,     weight: 0.6}
+
+layer_mapping: all
+
+functionary_packing: false
+
+training_args:
+  max_steps: 4580                  # 4580 x 65,536 = 300.1 M tokens
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16
+
+  per_device_train_batch_size: 1   # LOAD-BEARING (memory, and batch-1 assumptions)
+  gradient_accumulation_steps: 2   # 4 nodes x 4 GPUs x 2 = global batch 32
+
+  learning_rate: 1.0e-3
+  weight_decay: 0.00
+  warmup_ratio: 0.025
+  lr_scheduler_type: cosine_with_min_lr
+  lr_scheduler_kwargs: {min_lr_rate: 0.01}   # NOT min_lr -- crashes under DeepSpeed
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 500
+  save_total_limit: 1
+  eval_strategy: steps
+  eval_steps: 500
+  per_device_eval_batch_size: 1    # default 8 will OOM
+  prediction_loss_only: true       # else HF gathers full logits
+  skip_memory_metrics: false
+  report_to: none
