@@ -1,0 +1,64 @@
+project_name: r6_stage2_kda_headgate_hybrid31_unfreeze
+ 
+# O2 / R6 stage 2 = R1-S2's recipe (RADLADS step 2: KL only, nothing frozen, constant 1e-5,
+# 1.0 B tokens on the zero-overlap FineWeb-Edu split), started from R6's stage-1 checkpoint.
+# IDENTICAL to r1_stage2_kda_hybrid31_unfreeze.yaml except: project_name, model, output_path.
+model: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r6_stage1_kda_headgate_hybrid31/checkpoint-4580
+trust_remote_code: true
+ 
+output_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/output/r6_stage2_kda_headgate_hybrid31_unfreeze
+use_flash_attention: true
+sequence_length: 2048
+ 
+dataset:
+  train_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_train_stage2_nooverlap
+  eval_dataset:
+    disk_path: /leonardo_work/EUHPC_D34_049/WORK_LUKAS/datasets/fineweb_edu_3B_heldout
+  seed: 42
+  num_eval_samples: 200
+ 
+teacher:
+  kind: hf
+  path: arcee-ai/AFM-4.5B-Base
+  kwargs:
+    attn_implementation: flash_attention_2
+    dtype: bfloat16
+ 
+loss_functions:
+  - {function: kl, weight: 1.0, temperature: 2.0}
+ 
+functionary_packing: false
+ 
+training_args:
+  max_steps: 15260                 # 15,260 x 65,536 = 1.000 B tokens
+  dataset_text_field: text
+  packing: true
+  pad_to_multiple_of: 128
+  dataset_num_proc: 16             # MUST stay 16: it is part of the cache key
+ 
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 2
+ 
+  learning_rate: 1.0e-5
+  weight_decay: 0.00
+  warmup_steps: 380
+  lr_scheduler_type: constant_with_warmup
+  max_grad_norm: 0.5
+  optim: adamw_torch
+  bf16: true
+ 
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: {use_reentrant: false}
+ 
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 1526
+  save_total_limit: 10
+  save_only_model: true
+  eval_strategy: steps
+  eval_steps: 1526
+  per_device_eval_batch_size: 1
+  prediction_loss_only: true
+  skip_memory_metrics: false
+  report_to: none
